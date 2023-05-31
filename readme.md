@@ -49,5 +49,6 @@ docker-compose up
 
 7. The application will send the generated response back to the sender's phone number.
 
-##License
+## License
+
 This project is licensed under the MIT License.
