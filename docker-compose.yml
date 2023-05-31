@@ -11,4 +11,4 @@ services:
   redis-server:
     image: redis
     ports:
-      - '6379:6379' # Change the mapping to use a different port
+      - '6379:6379'
