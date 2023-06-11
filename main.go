@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
+
 	"textgenie/config"
 	"textgenie/rate_limit"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/sashabaranov/go-openai"
@@ -36,8 +37,9 @@ func main() {
 	})
 
 	// Start the server
-	log.Println("Server listening on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", router))
+	addr := ":8080"
+	log.Printf("Server listening on %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, router))
 }
 
 func handleIncomingSMS(w http.ResponseWriter, r *http.Request, rl *rate_limit.RateLimiter) {
@@ -48,48 +50,44 @@ func handleIncomingSMS(w http.ResponseWriter, r *http.Request, rl *rate_limit.Ra
 
 	twilioClient := twilio.NewRestClient()
 
-	params := &twilioApi.CreateMessageParams{}
-	params.SetFrom(config.TwilioPhoneNumber)
-	params.SetTo(from)
+	messageParams := &twilioApi.CreateMessageParams{}
+	messageParams.SetFrom(config.TwilioPhoneNumber)
+	messageParams.SetTo(from)
 
-	if rl.CheckRateLimit(from, 1, time.Minute) == false {
-		params.SetBody("Too many requests!")
-		twilioClient.Api.CreateMessage(params)
-
-		// We don't return a 429 since we want to let the user know via text
+	if !rl.CheckRateLimit(from, 1, time.Minute) {
+		// We do not return a 429 since we want to let the user know that they are
+		// sending too many requests via text
+		messageParams.SetBody("Too many requests!")
+		twilioClient.Api.CreateMessage(messageParams)
 	} else {
 		openAiClient := openai.NewClient(config.OpenAiToken)
-		resp1, err1 := openAiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: openai.GPT3Dot5Turbo,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: body,
-					},
+		completionReq := openai.ChatCompletionRequest{
+			Model: openai.GPT3Dot5Turbo,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: body,
 				},
 			},
-		)
+		}
 
-		if err1 != nil {
-			fmt.Printf("ChatCompletion error: %v\n", err1)
+		completionResp, err := openAiClient.CreateChatCompletion(context.Background(), completionReq)
+		if err != nil {
+			log.Printf("Error completing chat: %v\n", err)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		fmt.Println(resp1.Choices[0].Message.Content)
+		responseContent := completionResp.Choices[0].Message.Content
+		fmt.Println(responseContent)
+		messageParams.SetBody(responseContent)
 
-		params.SetBody(resp1.Choices[0].Message.Content)
-
-		resp, err := twilioClient.Api.CreateMessage(params)
+		messageResp, err := twilioClient.Api.CreateMessage(messageParams)
 		if err != nil {
-			fmt.Println(err.Error())
+			log.Println(err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
 		} else {
-			if resp.Sid != nil {
-				fmt.Println(*resp.Sid)
-			} else {
-				fmt.Println(resp.Sid)
-			}
+			log.Println(messageResp.Sid)
 		}
 	}
 
